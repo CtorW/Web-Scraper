@@ -105,13 +105,13 @@ select_option() {
             $'\x1b') 
                 read -rsn2 -t 0.1 key
                 case "$key" in
-                    '[A') # Up arrow
+                    '[A')
                         ((selected--))
                         if [ $selected -lt 0 ]; then
                             selected=$((num_options - 1))
                         fi
                         ;;
-                    '[B') # Down arrow
+                    '[B')
                         ((selected++))
                         if [ $selected -ge $num_options ]; then
                             selected=0
@@ -119,7 +119,7 @@ select_option() {
                         ;;
                 esac
                 ;;
-            '') # Enter key
+            '')
                 echo
                 break
                 ;;
@@ -128,6 +128,8 @@ select_option() {
 
     return $selected
 }
+
+URLS_FILE="urls.txt"
 
 check_dependencies() {
     echo -e "${BIBlue}Checking for required dependencies...${Color_Off}"
@@ -168,6 +170,99 @@ check_dependencies() {
     fi
 }
 
+add_url() {
+    clear
+    echo -e "${BWhite}Add a new URL${Color_Off}"
+    echo "-----------------"
+    read -p "Enter the URL (e.g., https://www.google.com): " url
+    if [[ -z "$url" ]]; then
+        echo -e "${BYellow}URL cannot be empty.${Color_Off}"
+        read -n 1 -s -r -p "Press any key to continue..."
+        return
+    elif [[ ! "$url" =~ ^https?:// ]]; then
+        echo -e "${BYellow}URL must start with http:// or https://${Color_Off}"
+        read -n 1 -s -r -p "Press any key to continue..."
+        return
+    fi
+    if grep -qF "$url" "$URLS_FILE" 2>/dev/null; then
+        echo -e "${BYellow}This URL is already in the list.${Color_Off}"
+    else
+        echo "$url" >> "$URLS_FILE"
+        echo -e "${BGreen}URL added successfully.${Color_Off}"
+    fi
+    read -n 1 -s -r -p "Press any key to continue..."
+}
+
+check_urls() {
+    clear
+    echo -e "${BWhite}Checking Website Status${Color_Off}"
+    echo "-------------------------"
+    if [ ! -f "$URLS_FILE" ] || [ ! -s "$URLS_FILE" ]; then
+        echo -e "${BYellow}No URLs found in the list. Please add some first.${Color_Off}"
+        read -n 1 -s -r -p "Press any key to continue..."
+        return
+    fi
+    while IFS= read -r url || [[ -n "$url" ]]; do
+        printf "%-50s" "$url"
+        status_code=$(curl --silent --output /dev/null --write-out "%{http_code}" --connect-timeout 5 --max-time 10 "$url")
+        if [ "$status_code" -ge 200 ] && [ "$status_code" -lt 400 ]; then
+            echo -e "[${BGreen}UP: $status_code${Color_Off}]"
+        elif [ "$status_code" -ge 400 ] && [ "$status_code" -lt 600 ]; then
+            echo -e "[${BRed}DOWN: $status_code${Color_Off}]"
+        else
+            echo -e "[${BYellow}UNKNOWN${Color_Off}]"
+        fi
+    done < "$URLS_FILE"
+    echo "-------------------------"
+    read -n 1 -s -r -p "Press any key to continue..."
+}
+
+list_urls() {
+    clear
+    echo -e "${BWhite}List of Saved URLs${Color_Off}"
+    echo "-----------------"
+    if [ ! -f "$URLS_FILE" ] || [ ! -s "$URLS_FILE" ]; then
+        echo -e "${BYellow}No URLs found in the list.${Color_Off}"
+        read -n 1 -s -r -p "Press any key to continue..."
+        return
+    fi
+    local count=1
+    while IFS= read -r url || [[ -n "$url" ]]; do
+        echo -e "${BYellow}${count}.${Color_Off} ${BIWhite}$url${Color_Off}"
+        ((count++))
+    done < "$URLS_FILE"
+    echo "-----------------"
+    read -n 1 -s -r -p "Press any key to continue..."
+}
+
+remove_url() {
+    clear
+    echo -e "${BWhite}Remove a URL${Color_Off}"
+    echo "--------------"
+    if [ ! -f "$URLS_FILE" ] || [ ! -s "$URLS_FILE" ]; then
+        echo -e "${BYellow}No URLs found in the list to remove.${Color_Off}"
+        read -n 1 -s -r -p "Press any key to continue..."
+        return
+    fi
+    local urls_array=()
+    while IFS= read -r url || [[ -n "$url" ]]; do
+        urls_array+=("$url")
+    done < "$URLS_FILE"
+    urls_array+=("Cancel")
+    select_option "${urls_array[@]}"
+    local selected_index=$?
+    if [ "$selected_index" -eq $(( ${#urls_array[@]} - 1 )) ]; then
+        echo -e "${BIYellow}Removal cancelled.${Color_Off}"
+        read -n 1 -s -r -p "Press any key to continue..."
+        return
+    fi
+    local url_to_remove="${urls_array[$selected_index]}"
+    grep -vF "$url_to_remove" "$URLS_FILE" > "${URLS_FILE}.tmp"
+    mv "${URLS_FILE}.tmp" "$URLS_FILE"
+    echo -e "${BGreen}URL '${url_to_remove}' removed successfully.${Color_Off}"
+    read -n 1 -s -r -p "Press any key to continue..."
+}
+
 scrape_website() {
     clear
     echo -e "${BWhite}Web Scraper${Color_Off}"
@@ -191,6 +286,12 @@ scrape_website() {
     else
         echo -e "${BGreen}Scraped Content:${Color_Off}"
         echo -e "${content}"
+        read -p "Would you like to save this content to a file? (y/n): " save_choice
+        if [[ "$save_choice" =~ ^[Yy]$ ]]; then
+            local filename="scraped_content_$(date +%Y%m%d_%H%M%S).txt"
+            echo -e "${content}" > "$filename"
+            echo -e "${BGreen}Content saved to ${filename}${Color_Off}"
+        fi
     fi
 
     echo "--------------------------------------------------"
@@ -202,13 +303,17 @@ main() {
     
     while true; do
         clear
-        local options=("Scrape a Website" "Exit")
+        local options=("Add URL" "Check URLs" "List URLs" "Remove URL" "Scrape a Website" "Exit")
         select_option "${options[@]}"
         local choice=$?
 
         case "$choice" in
-            0) scrape_website ;;
-            1) echo -e "${BIGreen}Exiting script. Goodbye!${Color_Off}"; exit 0 ;;
+            0) add_url ;;
+            1) check_urls ;;
+            2) list_urls ;;
+            3) remove_url ;;
+            4) scrape_website ;;
+            5) echo -e "${BIGreen}Exiting script. Goodbye!${Color_Off}"; exit 0 ;;
             *) echo -e "${BRed}Invalid choice.${Color_Off}"; read -n 1 -s -r -p "Press any key to continue..." ;;
         esac
     done
